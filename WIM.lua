@@ -263,14 +263,9 @@ function WIM_PlayerCacheQueueEmpty()
 end
 
 function WIM_Update()
-	-- Turtle WoW: 30 second WHO cooldown
-	local WHO_COOLDOWN = 30
-	if not WIM_LastWhoListUpdate or GetTime() - WIM_LastWhoListUpdate > WHO_COOLDOWN then
+	if not WIM_LastWhoListUpdate or GetTime() - WIM_LastWhoListUpdate > 5 then
 		for name, info in WIM_PlayerCacheQueue do
-			-- Remove from queue after 3 failed attempts
-			if info.attempts > 3 then
-				WIM_PlayerCacheQueue[name] = nil
-			elseif not info.last_sent or GetTime() - info.last_sent > WHO_COOLDOWN then
+			if info.attempts <= 5 and not info.last_sent or GetTime() - info.last_sent > ldexp(2, info.attempts) then
 				SendWho('n-"'..name..'"')
 				info.last_sent = GetTime()
 				info.attempts = info.attempts + 1
@@ -293,17 +288,33 @@ function WIM_WhoInfo(name, callback)
 end
 
 local function playerCheck(player, k)
-	-- Always show messages immediately - WHO info will load async
-	-- Queue WHO request for player info (class/race/level) if not cached
-	if not WIM_PlayerCache[player] and not WIM_PlayerCacheQueue[player] then
-		WIM_WhoInfo(player, function(info)
-			-- Info loaded - update window if exists
-			if WIM_Windows[player] then
-				WIM_SetWhoInfo(player)
-			end
-		end)
+	if not WIM_Data.blockLowLevel then
+		return k()
 	end
-	return k()
+
+	if WIM_WhisperedTo[player] then
+		return k()
+	end
+	
+	for i=1, GetNumFriends() do
+		name = GetFriendInfo(i)
+		if name == player then
+			return k()
+		end
+	end
+
+	for i=1, GetNumGuildMembers(true) do
+		name = GetGuildRosterInfo(i)
+		if name == player then
+			return k()
+		end
+	end
+
+	WIM_WhoInfo(player, function(info)
+		if info.level >= 10 then
+			return k()
+		end
+	end)
 end
 
 function WIM_ChatFrame_OnEvent(event)
