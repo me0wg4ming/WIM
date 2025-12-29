@@ -399,10 +399,17 @@ local function playerCheck(player, k)
 	-- Always show messages immediately - WHO info will load async
 	-- Queue WHO request for player info (class/race/level) if not cached
 	WIM_DebugMsg("|cff00ffff[WIM]|r playerCheck: " .. player)
+	
+	-- Skip WHO check if player is a GM (we already have GM info)
+	if WIM_PlayerCache[player] and WIM_PlayerCache[player].isGM then
+		WIM_DebugMsg("|cff00ffff[WIM]|r Skipping WHO for GM: " .. player)
+		return k()
+	end
+	
 	if not WIM_PlayerCache[player] and not WIM_PlayerCacheQueue[player] then
 		WIM_WhoInfo(player, function(info)
-			-- Info loaded - update window if exists
-			if WIM_Windows[player] then
+			-- Info loaded - update window if exists (but not for GMs)
+			if WIM_Windows[player] and not (WIM_PlayerCache[player] and WIM_PlayerCache[player].isGM) then
 				WIM_SetWhoInfo(player)
 			end
 		end)
@@ -427,9 +434,23 @@ function WIM_ChatFrame_OnEvent(event)
 		ChatEdit_SetLastTellTarget(ChatFrameEditBox,arg2);
 	elseif event == 'CHAT_MSG_WHISPER' then
 		local content, sender = arg1, arg2
+		local isGMSender = arg6 == "GM" -- arg6 contains chat flags like "GM", "DEV", etc.
+		
+		-- Store GM status BEFORE playerCheck (so it's set when WIM_SetWhoInfo is called)
+		if isGMSender then
+			WIM_PlayerCache[sender] = WIM_PlayerCache[sender] or {}
+			WIM_PlayerCache[sender].isGM = true
+		end
+		
 		playerCheck(sender, function()
+			-- Update window if GM and window exists
+			if isGMSender and WIM_Windows[sender] then
+				WIM_SetWhoInfo(sender)
+			end
 			if WIM_FilterResult(content) ~= 1 and WIM_FilterResult(content) ~= 2 then
-				msg = "[|Hplayer:"..sender.."|h"..WIM_GetAlias(sender, true).."|h]: "..content
+				-- Include <GM> tag in displayed name if sender is GM
+				local displayName = isGMSender and ("<GM>"..WIM_GetAlias(sender, true)) or WIM_GetAlias(sender, true)
+				msg = "[|Hplayer:"..sender.."|h"..displayName.."|h]: "..content
 				WIM_PostMessage(sender, msg, 1, sender, content)
 			end
 			ChatEdit_SetLastTellTarget(ChatFrameEditBox, sender)
@@ -1036,20 +1057,42 @@ end
 
 function WIM_SetWhoInfo(theUser)
 	local classIcon = getglobal(WIM_Windows[theUser].frame.."ClassIcon");
-	if(WIM_Data.characterInfo.classIcon and WIM_ClassIcons[WIM_PlayerCache[theUser].class]) then
+	
+	-- Check if user is a GM - show GM icon instead of class icon
+	if WIM_PlayerCache[theUser] and WIM_PlayerCache[theUser].isGM then
+		classIcon:SetTexture("Interface\\AddOns\\WIM\\Images\\Blizzard");
+		-- Update name with GM tag if not already present
+		local currentName = getglobal(WIM_Windows[theUser].frame.."From"):GetText()
+		if currentName and not string.find(currentName, "<GM>") then
+			getglobal(WIM_Windows[theUser].frame.."From"):SetText("|cff00ccff<GM>|r "..WIM_GetAlias(theUser));
+		end
+		-- Show GM in details instead of class info
+		getglobal(WIM_Windows[theUser].frame.."CharacterDetails"):SetText("|cff00ccffGame Master|r");
+		return; -- Don't show class info for GMs
+	elseif(WIM_Data.characterInfo.classIcon and WIM_PlayerCache[theUser] and WIM_ClassIcons[WIM_PlayerCache[theUser].class]) then
 		classIcon:SetTexture(WIM_ClassIcons[WIM_PlayerCache[theUser].class]);
+		if(WIM_Data.characterInfo.classColor) then	
+			getglobal(WIM_Windows[theUser].frame.."From"):SetText(WIM_UserWithClassColor(theUser));
+		end
+		if(WIM_Data.characterInfo.details) then	
+			local tGuild = "";
+			if(WIM_PlayerCache[theUser].guild ~= "") then
+				tGuild = "<"..WIM_PlayerCache[theUser].guild.."> ";
+			end
+			getglobal(WIM_Windows[theUser].frame.."CharacterDetails"):SetText("|cffffffff"..tGuild..WIM_PlayerCache[theUser].level.." "..WIM_PlayerCache[theUser].race.." "..WIM_PlayerCache[theUser].class.."|r");
+		end
 	else
 		classIcon:SetTexture("Interface\\AddOns\\WIM\\Images\\classBLANK");
-	end
-	if(WIM_Data.characterInfo.classColor) then	
-		getglobal(WIM_Windows[theUser].frame.."From"):SetText(WIM_UserWithClassColor(theUser));
-	end
-	if(WIM_Data.characterInfo.details) then	
-		local tGuild = "";
-		if(WIM_PlayerCache[theUser].guild ~= "") then
-			tGuild = "<"..WIM_PlayerCache[theUser].guild.."> ";
+		if(WIM_Data.characterInfo.classColor and WIM_PlayerCache[theUser]) then	
+			getglobal(WIM_Windows[theUser].frame.."From"):SetText(WIM_UserWithClassColor(theUser));
 		end
-		getglobal(WIM_Windows[theUser].frame.."CharacterDetails"):SetText("|cffffffff"..tGuild..WIM_PlayerCache[theUser].level.." "..WIM_PlayerCache[theUser].race.." "..WIM_PlayerCache[theUser].class.."|r");
+		if(WIM_Data.characterInfo.details and WIM_PlayerCache[theUser]) then	
+			local tGuild = "";
+			if(WIM_PlayerCache[theUser].guild ~= "") then
+				tGuild = "<"..WIM_PlayerCache[theUser].guild.."> ";
+			end
+			getglobal(WIM_Windows[theUser].frame.."CharacterDetails"):SetText("|cffffffff"..tGuild..WIM_PlayerCache[theUser].level.." "..WIM_PlayerCache[theUser].race.." "..WIM_PlayerCache[theUser].class.."|r");
+		end
 	end
 end
 
@@ -1182,6 +1225,10 @@ function WIM_AddToHistory(theUser, userFrom, theMessage, isMsgIn)
 			tmpEntry["time"] = date("%H:%M");
 			tmpEntry["msg"] = WIM_ConvertURLtoLinks(theMessage);
 			tmpEntry["from"] = userFrom;
+			-- Save GM status in history
+			if WIM_PlayerCache[userFrom] and WIM_PlayerCache[userFrom].isGM then
+				tmpEntry["isGM"] = true;
+			end
 			if(isMsgIn) then
 				tmpEntry["type"] = 2;
 			else
@@ -1220,8 +1267,12 @@ function WIM_DisplayHistory(theUser)
 		table.sort(WIM_History[theUser], WIM_SortHistory);
 		for i=table.getn(WIM_History[theUser])-WIM_Data.historySettings.popWin.count-1, table.getn(WIM_History[theUser]) do 
 			if(WIM_History[theUser][i]) then
-				--WIM_GetAlias
-				msg = "|Hplayer:"..WIM_History[theUser][i].from.."|h["..WIM_GetAlias(WIM_History[theUser][i].from, true).."]|h: "..WIM_History[theUser][i].msg;
+				-- Include <GM> tag if sender was GM
+				local displayName = WIM_GetAlias(WIM_History[theUser][i].from, true);
+				if WIM_History[theUser][i].isGM then
+					displayName = "<GM>"..displayName;
+				end
+				msg = "|Hplayer:"..WIM_History[theUser][i].from.."|h["..displayName.."]|h: "..WIM_History[theUser][i].msg;
 				if(WIM_Data.showTimeStamps) then
 					msg = WIM_History[theUser][i].time.." "..msg;
 				end
