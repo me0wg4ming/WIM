@@ -457,6 +457,22 @@ function WIM_ChatFrame_OnEvent(event)
 		end)
 	elseif event == 'CHAT_MSG_WHISPER_INFORM' then
 		local content, receiver = arg1, arg2
+		local isGMReceiver = arg6 == "GM" -- Check if receiver is GM
+		
+		WIM_DebugMsg("|cffff00ff[WIM GM]|r WHISPER_INFORM to: " .. receiver .. " | arg6: " .. tostring(arg6) .. " | isGM: " .. tostring(isGMReceiver))
+		
+		-- Store GM status BEFORE WIM_PostMessage
+		if isGMReceiver then
+			WIM_PlayerCache[receiver] = WIM_PlayerCache[receiver] or {}
+			WIM_PlayerCache[receiver].isGM = true
+			WIM_DebugMsg("|cffff00ff[WIM GM]|r Set isGM=true for: " .. receiver)
+			-- Update window if it already exists
+			if WIM_Windows[receiver] then
+				WIM_DebugMsg("|cffff00ff[WIM GM]|r Updating existing window for GM: " .. receiver)
+				WIM_SetWhoInfo(receiver)
+			end
+		end
+		
 		WIM_WhisperedTo[receiver] = true
 		if WIM_FilterResult(content) ~= 1 and WIM_FilterResult(content) ~= 2 then
 			msg = "[|Hplayer:"..UnitName("player").."|h"..WIM_GetAlias(UnitName("player"), true).."|h]: "..content
@@ -570,9 +586,17 @@ function WIM_PostMessage(user, msg, ttype, from, raw_msg, hotkeyFix)
 		if WIM_Data.characterInfo.show then
 			if table.getn(WIM_Split(user, '-')) == 2 then
 				-- WIM_GetBattleWhoInfo(user)
+			elseif WIM_PlayerCache[user] and WIM_PlayerCache[user].isGM then
+				-- Skip WHO for GMs, just set GM info
+				WIM_DebugMsg("|cffff00ff[WIM GM]|r PostMessage: Skipping WHO for GM: " .. user)
+				WIM_SetWhoInfo(user)
 			else
+				WIM_DebugMsg("|cffff00ff[WIM GM]|r PostMessage: Sending WHO for: " .. user .. " | isGM: " .. tostring(WIM_PlayerCache[user] and WIM_PlayerCache[user].isGM))
 				WIM_WhoInfo(user, function()
-					WIM_SetWhoInfo(user)
+					-- Don't update if player became GM in the meantime
+					if not (WIM_PlayerCache[user] and WIM_PlayerCache[user].isGM) then
+						WIM_SetWhoInfo(user)
+					end
 				end) 
 			end
 		end
